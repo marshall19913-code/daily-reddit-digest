@@ -1,11 +1,10 @@
 import json
 import urllib.request
-import urllib.parse
 from jinja2 import Template
 import datetime
+import time
 from concurrent.futures import ThreadPoolExecutor
 
-# Your full customized list of 55 subreddits
 SUBREDDITS = [
     'LocalLLaMA', 'AI_Agents', 'vibecoding', 'mlops', 'MachineLearning',
     'LanguageTechnology', 'PromptEngineering', 'AIToolsandTips', 'artificial',
@@ -23,34 +22,41 @@ SUBREDDITS = [
 TOP_N = 10
 
 def fetch_top_posts(subreddit, count=10):
-    rss_url = f"https://www.reddit.com/r/{subreddit}/top/.rss?t=day&limit={count}"
-    api_url = f"https://api.rss2json.com/v1/api.json?rss_url={urllib.parse.quote(rss_url)}"
+    # Reddit's native JSON endpoint
+    url = f"https://www.reddit.com/r/{subreddit}/top.json?t=day&limit={count}"
     
-    req = urllib.request.Request(
-        api_url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    )
+    # Custom Unique User-Agent header satisfies Reddit's API guidelines
+    headers = {
+        'User-Agent': f'script:daily-reddit-digest:v1.0 (by /u/marshall19913-code)'
+    }
     
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            
-            posts = []
-            if data.get('status') == 'ok':
-                for item in data.get('items', [])[:count]:
+    req = urllib.request.Request(url, headers=headers)
+    
+    # Retry mechanism in case of temporary throttling
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                
+                posts = []
+                children = data.get('data', {}).get('children', [])
+                for child in children[:count]:
+                    post_data = child.get('data', {})
                     posts.append({
-                        'title': item.get('title', 'No Title'),
-                        'link': item.get('link', '#'),
-                        'author': item.get('author', 'Unknown')
+                        'title': post_data.get('title', 'No Title'),
+                        'link': f"https://reddit.com{post_data.get('permalink', '#')}",
+                        'author': f"u/{post_data.get('author', 'Unknown')}"
                     })
-            return subreddit, posts
-    except Exception as e:
-        print(f"Error fetching r/{subreddit}: {e}")
-        return subreddit, []
+                return subreddit, posts
+        except Exception as e:
+            time.sleep(1.5 * (attempt + 1))  # Pause before retry
+            
+    print(f"Failed to fetch r/{subreddit} after retries.")
+    return subreddit, []
 
-# Fetch feeds in parallel to make it much faster
+# Fetch in small batches (max_workers=3) to prevent triggering Reddit IP blocks
 all_posts = {}
-with ThreadPoolExecutor(max_workers=10) as executor:
+with ThreadPoolExecutor(max_workers=3) as executor:
     results = executor.map(lambda sub: fetch_top_posts(sub, TOP_N), SUBREDDITS)
     for sub, posts in results:
         all_posts[sub] = posts
