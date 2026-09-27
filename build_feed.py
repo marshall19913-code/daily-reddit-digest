@@ -1,28 +1,45 @@
 import feedparser
 from jinja2 import Template
 import datetime
+import time
+import urllib.request
 
-# 1. Define your subreddits and post limit
+# Define your target subreddits
 SUBREDDITS = ['python', 'technology', 'worldnews', 'datascience']
 TOP_N = 10
 
 def fetch_top_posts(subreddit, count=10):
     url = f"https://www.reddit.com/r/{subreddit}/top/.rss?t=day&limit={count}"
-    # Set a custom User-Agent to comply with Reddit rate limits
-    feed = feedparser.parse(url, request_headers={'User-Agent': 'DailyRedditDigestBot/1.0'})
     
-    posts = []
-    for entry in feed.entries[:count]:
-        posts.append({
-            'title': entry.get('title', 'No Title'),
-            'link': entry.get('link', '#'),
-            'author': entry.get('author', 'Unknown')
-        })
-    return posts
+    # Custom headers mimic a real browser to prevent Reddit RSS blocks
+    req = urllib.request.Request(
+        url, 
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DailyDigestBot/1.0'}
+    )
+    
+    try:
+        # Fetch RSS feed data via urllib
+        with urllib.request.urlopen(req) as response:
+            feed = feedparser.parse(response.read())
+            
+        posts = []
+        for entry in feed.entries[:count]:
+            posts.append({
+                'title': entry.get('title', 'No Title'),
+                'link': entry.get('link', '#'),
+                'author': entry.get('author', 'Unknown')
+            })
+        return posts
+    except Exception as e:
+        print(f"Error fetching r/{subreddit}: {e}")
+        return []
 
-all_posts = {sub: fetch_top_posts(sub, TOP_N) for sub in SUBREDDITS}
+all_posts = {}
+for sub in SUBREDDITS:
+    all_posts[sub] = fetch_top_posts(sub, TOP_N)
+    time.sleep(1.5)  # 1.5 second pause between subreddits avoids rate limits
 
-# 2. Responsive HTML/CSS Template
+# HTML Template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -52,6 +69,7 @@ HTML_TEMPLATE = """
         .post-link { font-weight: 600; color: var(--link); text-decoration: none; font-size: 1.05rem; line-height: 1.4; display: block; }
         .post-link:hover { text-decoration: underline; }
         .post-meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; }
+        .empty-notice { color: var(--text-muted); font-style: italic; font-size: 0.9rem; }
     </style>
 </head>
 <body>
@@ -64,6 +82,7 @@ HTML_TEMPLATE = """
         {% for sub, posts in feeds.items() %}
         <div class="section">
             <h2 class="section-title">r/{{ sub }}</h2>
+            {% if posts %}
             <ul class="post-list">
                 {% for post in posts %}
                 <li class="post-item">
@@ -72,6 +91,9 @@ HTML_TEMPLATE = """
                 </li>
                 {% endfor %}
             </ul>
+            {% else %}
+            <p class="empty-notice">No posts loaded. Reddit RSS temporarily throttled this request.</p>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
@@ -79,7 +101,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# 3. Output to index.html (Required for GitHub Pages root)
 template = Template(HTML_TEMPLATE)
 rendered_html = template.render(
     feeds=all_posts, 
