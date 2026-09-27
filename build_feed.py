@@ -1,35 +1,38 @@
-import feedparser
+import json
+import urllib.request
+import urllib.parse
 from jinja2 import Template
 import datetime
 import time
-import urllib.request
 
-# Define your target subreddits
 SUBREDDITS = ['python', 'technology', 'worldnews', 'datascience']
 TOP_N = 10
 
 def fetch_top_posts(subreddit, count=10):
-    url = f"https://www.reddit.com/r/{subreddit}/top/.rss?t=day&limit={count}"
+    # Target RSS URL
+    rss_url = f"https://www.reddit.com/r/{subreddit}/top/.rss?t=day&limit={count}"
     
-    # Custom headers mimic a real browser to prevent Reddit RSS blocks
+    # Route through RSS2JSON service to bypass GitHub Actions IP blocks
+    api_url = f"https://api.rss2json.com/v1/api.json?rss_url={urllib.parse.quote(rss_url)}"
+    
     req = urllib.request.Request(
-        url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) DailyDigestBot/1.0'}
+        api_url, 
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     )
     
     try:
-        # Fetch RSS feed data via urllib
         with urllib.request.urlopen(req) as response:
-            feed = feedparser.parse(response.read())
+            data = json.loads(response.read().decode('utf-8'))
             
-        posts = []
-        for entry in feed.entries[:count]:
-            posts.append({
-                'title': entry.get('title', 'No Title'),
-                'link': entry.get('link', '#'),
-                'author': entry.get('author', 'Unknown')
-            })
-        return posts
+            posts = []
+            if data.get('status') == 'ok':
+                for item in data.get('items', [])[:count]:
+                    posts.append({
+                        'title': item.get('title', 'No Title'),
+                        'link': item.get('link', '#'),
+                        'author': item.get('author', 'Unknown')
+                    })
+            return posts
     except Exception as e:
         print(f"Error fetching r/{subreddit}: {e}")
         return []
@@ -37,9 +40,8 @@ def fetch_top_posts(subreddit, count=10):
 all_posts = {}
 for sub in SUBREDDITS:
     all_posts[sub] = fetch_top_posts(sub, TOP_N)
-    time.sleep(1.5)  # 1.5 second pause between subreddits avoids rate limits
+    time.sleep(1)
 
-# HTML Template
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -92,7 +94,7 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </ul>
             {% else %}
-            <p class="empty-notice">No posts loaded. Reddit RSS temporarily throttled this request.</p>
+            <p class="empty-notice">No posts loaded for this subreddit today.</p>
             {% endif %}
         </div>
         {% endfor %}
