@@ -3,16 +3,27 @@ import urllib.request
 import urllib.parse
 from jinja2 import Template
 import datetime
-import time
+from concurrent.futures import ThreadPoolExecutor
 
-SUBREDDITS = ['python', 'technology', 'worldnews', 'datascience']
+# Your full customized list of 55 subreddits
+SUBREDDITS = [
+    'LocalLLaMA', 'AI_Agents', 'vibecoding', 'mlops', 'MachineLearning',
+    'LanguageTechnology', 'PromptEngineering', 'AIToolsandTips', 'artificial',
+    'singularity', 'ArtificialIntelligence', 'LLMDevs', 'LangChain', 'AutoGPT',
+    'n8n', 'ClaudeAI', 'aipromptprogramming', 'FluxAI', 'aivideo', 'AiVideos',
+    'ControlProblem', 'accelerate', 'agi', 'robotics', 'robotlearning',
+    'RoboticsEngineering', 'deeplearning', 'neuralnetworks', 'SideProject',
+    'StableDiffusion', 'ChatGPT', 'OpenAI', 'worldnews', 'TrendForecast',
+    'BuyItForLife', 'SkincareAddiction', 'Beauty', 'Hardware', 'SelfHosted',
+    'Homelab', 'SupplyChain', 'SysAdmin', 'RenewableEnergy', 'EnergyStorage',
+    '3Dprinting', 'Biohackers', 'GenZ', 'GenAlpha', 'streetwear', 'ThrowingFits',
+    'BeautyGuruChatter', 'Tiktokfashion', 'gamedev', 'popheads', 'StanTwitter'
+]
+
 TOP_N = 10
 
 def fetch_top_posts(subreddit, count=10):
-    # Target RSS URL
     rss_url = f"https://www.reddit.com/r/{subreddit}/top/.rss?t=day&limit={count}"
-    
-    # Route through RSS2JSON service to bypass GitHub Actions IP blocks
     api_url = f"https://api.rss2json.com/v1/api.json?rss_url={urllib.parse.quote(rss_url)}"
     
     req = urllib.request.Request(
@@ -21,7 +32,7 @@ def fetch_top_posts(subreddit, count=10):
     )
     
     try:
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode('utf-8'))
             
             posts = []
@@ -32,15 +43,17 @@ def fetch_top_posts(subreddit, count=10):
                         'link': item.get('link', '#'),
                         'author': item.get('author', 'Unknown')
                     })
-            return posts
+            return subreddit, posts
     except Exception as e:
         print(f"Error fetching r/{subreddit}: {e}")
-        return []
+        return subreddit, []
 
+# Fetch feeds in parallel to make it much faster
 all_posts = {}
-for sub in SUBREDDITS:
-    all_posts[sub] = fetch_top_posts(sub, TOP_N)
-    time.sleep(1)
+with ThreadPoolExecutor(max_workers=10) as executor:
+    results = executor.map(lambda sub: fetch_top_posts(sub, TOP_N), SUBREDDITS)
+    for sub, posts in results:
+        all_posts[sub] = posts
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -82,7 +95,7 @@ HTML_TEMPLATE = """
         </header>
         
         {% for sub, posts in feeds.items() %}
-        <div class="section">
+        <div class="section" id="{{ sub }}">
             <h2 class="section-title">r/{{ sub }}</h2>
             {% if posts %}
             <ul class="post-list">
