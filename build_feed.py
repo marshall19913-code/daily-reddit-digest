@@ -2,8 +2,7 @@ import json
 import urllib.request
 from jinja2 import Template
 import datetime
-import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
 
 SUBREDDITS = [
     'LocalLLaMA', 'AI_Agents', 'vibecoding', 'mlops', 'MachineLearning',
@@ -21,45 +20,53 @@ SUBREDDITS = [
 
 TOP_N = 10
 
-def fetch_top_posts(subreddit, count=10):
-    # Reddit's native JSON endpoint
-    url = f"https://www.reddit.com/r/{subreddit}/top.json?t=day&limit={count}"
+def fetch_batch_posts(subreddit_batch):
+    # Join subreddits with '+' to fetch in a single HTTP request
+    joined_subs = "+".join(subreddit_batch)
+    url = f"https://www.reddit.com/r/{joined_subs}/top.json?t=day&limit=100"
     
-    # Custom Unique User-Agent header satisfies Reddit's API guidelines
     headers = {
-        'User-Agent': f'script:daily-reddit-digest:v1.0 (by /u/marshall19913-code)'
+        'User-Agent': 'script:daily-reddit-digest:v1.0 (by /u/marshall19913-code)'
     }
     
     req = urllib.request.Request(url, headers=headers)
     
-    # Retry mechanism in case of temporary throttling
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
+    batch_posts = defaultdict(list)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            children = data.get('data', {}).get('children', [])
+            
+            for child in children:
+                post_data = child.get('data', {})
+                sub = post_data.get('subreddit')
                 
-                posts = []
-                children = data.get('data', {}).get('children', [])
-                for child in children[:count]:
-                    post_data = child.get('data', {})
-                    posts.append({
+                # Filter to top N per subreddit
+                if len(batch_posts[sub]) < TOP_N:
+                    batch_posts[sub].append({
                         'title': post_data.get('title', 'No Title'),
                         'link': f"https://reddit.com{post_data.get('permalink', '#')}",
                         'author': f"u/{post_data.get('author', 'Unknown')}"
                     })
-                return subreddit, posts
-        except Exception as e:
-            time.sleep(1.5 * (attempt + 1))  # Pause before retry
-            
-    print(f"Failed to fetch r/{subreddit} after retries.")
-    return subreddit, []
+    except Exception as e:
+        print(f"Error fetching batch: {e}")
+        
+    return batch_posts
 
-# Fetch in small batches (max_workers=3) to prevent triggering Reddit IP blocks
-all_posts = {}
-with ThreadPoolExecutor(max_workers=3) as executor:
-    results = executor.map(lambda sub: fetch_top_posts(sub, TOP_N), SUBREDDITS)
-    for sub, posts in results:
-        all_posts[sub] = posts
+# Divide 55 subreddits into batches of 20
+CHUNK_SIZE = 20
+batches = [SUBREDDITS[i:i + CHUNK_SIZE] for i in range(0, len(SUBREDDITS), CHUNK_SIZE)]
+
+all_posts = {sub: [] for sub in SUBREDDITS}
+
+# Fetch all batches (only 3 total web calls)
+for batch in batches:
+    fetched_data = fetch_batch_posts(batch)
+    for sub, posts in fetched_data.items():
+        # Match case-insensitively to maintain user's defined order
+        for original_sub in SUBREDDITS:
+            if original_sub.lower() == sub.lower():
+                all_posts[original_sub] = posts
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -113,7 +120,7 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </ul>
             {% else %}
-            <p class="empty-notice">No posts loaded for this subreddit today.</p>
+            <p class="empty-notice">No top posts loaded for this subreddit today.</p>
             {% endif %}
         </div>
         {% endfor %}
